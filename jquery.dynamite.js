@@ -25,6 +25,8 @@
 		}
 		return $element;
 	},
+	linkId = 0,
+	links = {},
 	mergeAttributes = function($element, html, tag) {
 		var attributes = (new RegExp('(^|>)([\s|\r?\n|\r|\t]*)<\s*' + tag + '(.*)>', 'i')).exec(html);
 
@@ -67,7 +69,7 @@
 			$(window).off('popstate').one('popstate', function(e) {
 				if (e.state && typeof e.state.response !== 'undefined') {
 					pushed = false;
-					parseResponse(e.state.response);
+					parseResponse.call(links[e.state.id], e.state.response);
 				}
 			});
 		}
@@ -93,41 +95,6 @@
 	attributeMatches = function(attr, value) {
 		return $(this).attr(attr) == value;
 	},
-	XMLHttpFactories = [
-		function () { return new XMLHttpRequest() },
-		function () { return new ActiveXObject("Msxml2.XMLHTTP") },
-		function () { return new ActiveXObject("Msxml3.XMLHTTP") },
-		function () { return new ActiveXObject("Microsoft.XMLHTTP") }
-	],
-	createXMLHTTPObject = function() {
-		var xmlhttp = false;
-
-		for (var i = 0; i < XMLHttpFactories.length; i++) {
-			try {
-				xmlhttp = XMLHttpFactories[i]();
-			}
-			catch (e) {
-				continue;
-			}
-			break;
-		}
-		return xmlhttp;
-	},
-	loadScript = function($script, where) {
-		var src = $script.attr('src'),
-		script = document.createElement('script');
-		script.type = 'text/javascript';
-
-		if (src) {
-			var xhrObj = createXMLHTTPObject();
-			xhrObj.open('GET', src, false);
-			xhrObj.send('');
-			script.text = xhrObj.responseText;
-		} else {
-			script.innerHTML = $script[0].innerHTML;
-		}
-		where.appendChild(script);
-	},
 	parseResponse = function(response) {
 		var $head = parseElement(response, 'head'),
 		$body = parseElement(response, 'body'),
@@ -136,53 +103,90 @@
 		$headOthers = $('*', $head).filter(isOther),
 		$bodyScripts = $('script', $body).filter(isAnyScript),
 		$stylesheets = $(),
-		$scripts = $();
+		$scripts = $(),
+		render = function() {
+			$('head *').filter(isOther).remove();
 
-		$('head *').filter(isOther).remove();
+			$('head link').filter(isStylesheet).filter(function() {
+				var href = $(this).attr('href'),
+				$found = $headStylesheets.filter(function() {
+					return attributeMatches.call(this, 'href', href);
+				}),
+				result = $found.length === 0;
 
-		$('head link').filter(isStylesheet).filter(function() {
-			var href = $(this).attr('href'),
-			$found = $headStylesheets.filter(function() {
-				return attributeMatches.call(this, 'href', href);
-			}),
-			result = $found.length === 0;
+				$headStylesheets = $headStylesheets.filter(function() {
+					return attributeMatchesNot.call(this, 'href', href);
+				});
+				return result;
+			})
+			.remove();
 
-			$headStylesheets = $headStylesheets.filter(function() {
-				return attributeMatchesNot.call(this, 'href', href);
-			});
-			return result;
-		})
-		.remove();
+			$('head script').remove();
+			$('body script').remove();
 
-		$('head script').remove();
-		$('body script').remove();
-
-		if ($headStylesheets.length) {
-			$('head').append($headStylesheets);
-		}
-		if ($headScripts.length) {
-			$('head').append($headScripts);
-		}
-		if ($headOthers.length) {
-			$('head').append($headOthers);
-		}
-		$('body').html(stripScripts($body.html()));
-		mergeAttributes($('body'), response, 'body');
-
-		if ($bodyScripts.length) {
-			for (var i = 0, l = $bodyScripts.length; i < l; i++) {
-				loadScript($($bodyScripts[i]), document.getElementsByTagName('body')[0]);
+			if ($headStylesheets.length) {
+				$('head').append($headStylesheets);
 			}
-		}
-		$(window).trigger('load');
+			if ($headScripts.length) {
+				$('head').append($headScripts);
+			}
+			if ($headOthers.length) {
+				$('head').append($headOthers);
+			}
+			$('body').html(stripScripts($body.html()));
+			mergeAttributes($('body'), response, 'body');
+
+			if ($bodyScripts.length) {
+				var pendingScripts = [];
+				var $bodyScript;
+
+				var loadScripts = function(exec) {
+					if ($bodyScripts.length <= 0) {
+						exec();
+						return;
+					}
+					var script;
+					var scriptEl = $bodyScripts.get(0);
+					var inline = typeof scriptEl.src === 'undefined' || !scriptEl.src;
+
+					$bodyScripts.splice(0, 1);
+
+					script = document.createElement('script');
+
+					if (inline) {
+						script.async = false;
+						script.innerHTML = scriptEl.innerHTML;
+						document.body.appendChild(script);
+						loadScripts(exec);
+					} else {
+						script.onload = function() {
+							loadScripts(exec);
+						};
+						script.async = false;
+						script.src = scriptEl.src;
+						document.body.appendChild(script);
+					}
+				};
+
+				loadScripts(function() {
+					$(window).trigger('load');
+				});
+			}
+		};
+
+		$(this).one('pageReady', function() {
+			render();
+		})
+		.trigger('pageReady', [stripScripts($body.html()), render]);
 	},
 	loadUrl = function(url) {
+		var that = this;
+
 		$.ajax({
 			async: true,
 			url: url,
-			dataType: 'html',
 			success: function(response) {
-				parseResponse(response);
+				parseResponse.call(that, response);
 
 				var a = document.createElement('a'),
 				a2 = document.createElement('a');
@@ -191,17 +195,24 @@
 
 				if (supportHistory && a.href !== a2.href) {
 					pushed = true;
-					window.history.pushState({ response: response }, '', url);
+
+					if (!$(that).data('dynamite-id')) {
+						$(that).data('dynamite-id', linkId);
+						links[linkId] = that;
+					} else {
+						linkId = $(that).data('dynamite-id');
+					}
+					window.history.pushState({ response: response, id: linkId }, '', url);
 				}
 			}
 		});
-	};
+	},
+	asyncSupport = 'async' in document.createElement('script');
 
 	function Dynamite(element, options) {
 		var $element = $(element),
 		element = $element.get(0),
-		defaults = {
-		},
+		defaults = {},
 		options = $.extend({}, defaults, options);
 
 		this.options = options;
@@ -210,16 +221,23 @@
 
 		$element.one('click', function(e) {
 			var href = $(this).attr('href');
-			
-			if (href && this.host !== undefined && this.host === location.host) {
+
+			var a = document.createElement('a');
+			a.href = window.location.href;
+
+			if (href && this.host === a.host) {
 				e.preventDefault();
-				loadUrl(href);
+				loadUrl.call(this, href);
+				return false;
 			}
 		});
 	}
 
 	$.fn.dynamite = function(options) {
 		return this.each(function() {
+			if (!asyncSupport) {
+				return;
+			}
 			var dynamite = $(this).data('dynamite');
 
 			if (!isDynamiteObject(dynamite)) {
