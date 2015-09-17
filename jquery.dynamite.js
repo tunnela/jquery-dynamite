@@ -16,7 +16,7 @@
 		if (start) {
 			html = html.substr(start.index + start[0].length);
 			var end = (new RegExp('>([\s|\r?\n|\r|\t]*)<\s*/\s*' + tag, 'i')).exec(html);
-			
+
 			if (end) {
 				var div = document.createElement('div');
 				div.innerHTML = html.substr(0, end.index + end[0].length - tag.length - 2);
@@ -30,10 +30,10 @@
 	linkId = 0,
 	links = {},
 	mergeAttributes = function($element, html, tag) {
-		var attributes = (new RegExp('(^|>)([\s|\r?\n|\r|\t]*)<\s*' + tag + '(.*)>', 'i')).exec(html);
+		var attributes = (new RegExp('<\s*' + tag + '(.*)>', 'i')).exec(html);
 
 		if (attributes) {
-			var innerHtml = '<div ' + attributes[3] + '></div>',
+			var innerHtml = '<div ' + attributes[1] + '></div>',
 			tempEl = document.createElement('div');
 			tempEl.innerHTML = innerHtml;
 
@@ -141,6 +141,9 @@
 					$('head').append($headOthers);
 				}
 			},
+			htmlAttributes: function() {
+				mergeAttributes($('html'), response, 'html');
+			},
 			bodyAttributes: function() {
 				mergeAttributes($('body'), response, 'body');
 			},
@@ -188,6 +191,7 @@
 				this.bodyAttributes();
 			},
 			renderHead: function() {
+				this.htmlAttributes();
 				this.headOthers();
 				this.headStylesheets();
 				this.headScripts();
